@@ -25,7 +25,8 @@ static constexpr std::array<const char *const, 32> Rv_regnames = {
     "s6",   "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
 };
 
-enum InstructionFlags : unsigned {
+
+enum InstructionFlags : unsigned long {
     IMF_SUPPORTED = 1L << 0,  /**< Instruction is supported */
     IMF_MEMWRITE = 1L << 1,   /**< Write to the memory when memory stage is reached */
     IMF_MEMREAD = 1L << 2,    /**< Read from the memory when memory stage is reached */
@@ -55,12 +56,24 @@ enum InstructionFlags : unsigned {
     IMF_CSR = 1L << 20,        /**< Implies csr read and write */
     IMF_CSR_TO_ALU = 1L << 21, /**< Instruction modifies the current value */
     IMF_ALU_RS_ID = 1L << 22,
-    // RV64/32A - Atomic Memory Operations
+    // RV64/32A - Atomic Memory OperationsF
     IMF_AMO = 1L << 23,        /**< Instruction is AMO */
     // TODO do we want to add those signals to the visualization?
-
+    
     IMF_RV64 = 1L << 24, /**< Mark instructions which are available in 64-bit mode only. */
+    IMF_VSETVL = 1L << 25,
+    IMF_VECTOR_LOAD = 1L << 26,
+    IMF_VECTOR_STORE = 1L << 27,
+    IMF_VADD_VV = 1L << 28,
+    IMF_VADD_VX = 1L << 29,
+    IMF_VADD_VI = 1L << 30,
+    IMF_VMUL_VV = 1L << 31,
+    IMF_VMACC_VV = 1L << 32,
+    IMF_VMEM = 1L << 33,
 };
+// Define a mask for standard instruction flags (excluding custom vector flags)
+    constexpr InstructionFlags IMF_STANDARD_MASK = static_cast<InstructionFlags>(
+        IMF_SUPPORTED | IMF_RV64 | IMF_AMO | IMF_MUL);
 
 /**
  * Collection of data necessary to parse instruction from tokens.

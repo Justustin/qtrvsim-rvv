@@ -17,6 +17,8 @@
 #include <QObject>
 
 namespace machine {
+// core.h or core.cpp
+
 
 using std::array;
 
@@ -123,7 +125,7 @@ protected:
 
     FetchState fetch(PCInterstage pc, bool skip_break);
     DecodeState decode(const FetchInterstage &);
-    static ExecuteState execute(const DecodeInterstage &);
+    ExecuteState execute(const DecodeInterstage &);
     MemoryState memory(const ExecuteInterstage &);
     WritebackState writeback(const MemoryInterstage &);
 
@@ -141,6 +143,14 @@ protected:
         RegisterValue &towrite_val,
         RegisterValue rt_value,
         Address mem_addr);
+private:
+    int max_vector_size = 32;
+    int32_t registers[32];
+    std::vector<uint32_t> vectorRegisters[32]; // Array of 32 vector registers
+    int vl;
+    int cycle_count;
+    int vectorType;
+    
 };
 
 class CoreSingle : public Core {
@@ -159,6 +169,7 @@ protected:
     void do_reset() override;
 
 private:
+
     Address prev_inst_addr {};
 };
 

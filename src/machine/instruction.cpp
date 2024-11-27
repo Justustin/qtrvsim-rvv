@@ -85,6 +85,11 @@ static const ArgumentDesc arg_desc_list[] = {
     // 12-bit CSR address
     // (https://sourceware.org/git/?p=binutils-gdb.git;a=blob;f=opcodes/riscv-opc.c;h=7e95f645c5c5fe0a7c93c64c2f1719efaec67972;hb=HEAD#l928)
     ArgumentDesc('E', 'E', 0, 0xfff, { { { 12, 20 } }, 0 }),
+
+    // Vector registers
+    ArgumentDesc('D', 'v', 0, 0x1f, { { { 5, 7 } }, 0 }),           // Destination vector register (vd)
+    ArgumentDesc('S', 'v', 0, 0x1f, { { { 5, 15 } }, 0 }),          // Source vector register 1 (vs1)
+    ArgumentDesc('T', 'v', 0, 0x1f, { { { 5, 20 } }, 0 }),          // Source vector register 2 (vs2)
 };
 
 static const ArgumentDesc *arg_desc_by_code[(int)('z' + 1)];
@@ -416,6 +421,89 @@ static const struct InstructionMap OP_ALU_map[] = {
     {"or",   IT_R, { .alu_op=AluOp::OR },   NOMEM, nullptr, {"d", "s", "t"}, 0x00006033,0xfe00707f, { .flags = FLAGS_ALU_T_R_STD }, nullptr}, // OR
     {"and",  IT_R, { .alu_op=AluOp::AND },  NOMEM, nullptr, {"d", "s", "t"}, 0x00007033,0xfe00707f, { .flags = FLAGS_ALU_T_R_STD }, nullptr}, // AND
 };
+static const struct InstructionMap VSETVL_map[] = {
+    {"vsetvl", IT_R, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"d", "s", "t"},0x00000007, 0xfe00707F,  {  .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VSETVL }, nullptr},
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+};
+static const struct InstructionMap VADD_VV_map[] = {
+    {"vadd.vv", IT_R, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"D", "S", "T"},0x0000000b, 0xfe00707f, { .flags =  IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VADD_VV }, nullptr},
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+};
+static const struct InstructionMap VADD_VX_map[] = {
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    {"vadd.vx", IT_R, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"D", "S", "T"}, 0x0000401f, 0xfe00707f, { .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VADD_VX }, nullptr},
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+};
+
+static const struct InstructionMap VADD_VI_map[] = {
+   {"vadd.vi", IT_R, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"D", "S", "j"},0x00000027, 0xfe00707f, { .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT |  IMF_VADD_VI}, nullptr},
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+   IM_UNKNOWN,
+};
+static const struct InstructionMap VMUL_map[] = {
+    {"vmul.vv", IT_R, { .mul_op=MulOp::MUL }, NOMEM, nullptr, {"D", "S", "T"},0x0000002b, 0xfe00707f, { .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VMUL_VV }, nullptr},
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+};
+static const struct InstructionMap VLW_map[] = {
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    {"vlw.v",   IT_I, { .alu_op=AluOp::ADD }, AC_U32, nullptr, {"D", "o(s)"}, 0x0000603f, 0x0000707f, { .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VMEM | IMF_VECTOR_LOAD }, nullptr},
+    IM_UNKNOWN,
+};
+static const struct InstructionMap VSW_map[] = {
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    {"vsw.v",   IT_S, { .alu_op=AluOp::ADD }, AC_U32, nullptr, {"T", "q(s)"}, 0x00006043, 0x0000707f, { .flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VMEM | IMF_VECTOR_STORE }, nullptr},
+    IM_UNKNOWN,
+};
+static const struct InstructionMap VMACC_VV_map[]{
+    {"vmacc.vv", IT_R, {.alu_op=AluOp::ADD}, AC_NONE, nullptr, {"d", "S", "T"}, 0x00000047, 0xFC00707F, {.flags = IMF_SUPPORTED | IMF_REGWRITE | IMF_ALU_REQ_RS | IMF_ALU_REQ_RT | IMF_VMACC_VV}, nullptr},    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+};
+
+
+
 
 // RV32M
 #define MUL_MAP_ITEM(NAME, OP, CODE) \
@@ -580,30 +668,30 @@ static const struct InstructionMap OP_32_map[] = {
 // Full, uncomprese, instructions top level map
 
 static const struct InstructionMap I_inst_map[] = {
-    {"load", IT_I, NOALU, NOMEM, LOAD_map, {}, 0x03, 0x7f, { .subfield = {3, 12} }, nullptr}, // LOAD
-    IM_UNKNOWN, // LOAD-FP
-    IM_UNKNOWN, // custom-0
+    {"load", IT_I, NOALU, NOMEM, LOAD_map, {}, 0x03, 0x7f, { .subfield = {3, 12} }, nullptr}, // LOAD 
+    {"vsetvl", IT_R, NOALU, NOMEM, VSETVL_map, {}, 0x05700057, 0xfe00707F,  {.subfield = {3, 12}}, nullptr},
+    {"vadd.vv", IT_R, NOALU, NOMEM, VADD_VV_map, {}, 0x00000057, 0xfe00707f, {.subfield = {3, 12}}, nullptr},    
     {"misc-mem", IT_I, NOALU, NOMEM, MISC_MEM_map, {}, 0x0f, 0x7f, { .subfield = {3, 12} }, nullptr}, // MISC-MEM
     {"op-imm", IT_I, NOALU, NOMEM, OP_IMM_map, {}, 0x13, 0x7f, { .subfield = {3, 12} }, nullptr}, // OP-IMM
     {"auipc", IT_U, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"d", "u"}, 0x17, 0x7f, { .flags = IMF_SUPPORTED | IMF_ALUSRC | IMF_REGWRITE | IMF_PC_TO_ALU }, nullptr}, // AUIPC
     {"op-imm-32", IT_I, NOALU, NOMEM, OP_IMM_32_map, {}, 0x1b, 0x7f, { .subfield = {3, 12} }, nullptr}, // OP-IMM-32    IM_UNKNOWN, // OP-IMM-32
-    IM_UNKNOWN, // 48b
+    {"vadd.vx", IT_R, NOALU, NOMEM, VADD_VX_map, {}, 0x04000057, 0xfe00707f, { .subfield = {3, 12} }, nullptr},
     {"store", IT_I, NOALU, NOMEM, STORE_map, {}, 0x23, 0x7f, { .subfield = {3, 12} }, nullptr}, // STORE
-    IM_UNKNOWN, // STORE-FP
-    IM_UNKNOWN, // custom-1
+    {"vadd.vi", IT_R, NOALU, NOMEM, VADD_VI_map, {},  0x06000057, 0xfe00707f, { .subfield = {3, 12} }, nullptr},
+    {"vmul", IT_R, NOALU, NOMEM, VMUL_map, {}, 0x12000057, 0xfe00707f, { .subfield = {3, 12} }, nullptr},
     {"amo", IT_R, NOALU, NOMEM, AMO_map, {}, 0x2f, 0x7f, { .subfield = {3, 12} }, nullptr}, // OP-32
     {"op", IT_R, NOALU, NOMEM, OP_map, {}, 0x33, 0x7f, { .subfield = {1, 25} }, nullptr}, // OP
     {"lui", IT_U, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"d", "u"}, 0x37, 0x7f, { .flags = IMF_SUPPORTED | IMF_ALUSRC | IMF_REGWRITE }, nullptr}, // LUI
     {"op-32", IT_R, NOALU, NOMEM, OP_32_map, {}, 0x3b, 0x7f, { .subfield = {1, 25} }, nullptr}, // OP-32
-    IM_UNKNOWN, // 64b
-    IM_UNKNOWN, // MADD
-    IM_UNKNOWN, // MSUB
-    IM_UNKNOWN, // NMSUB
-    IM_UNKNOWN, // NMADD
-    IM_UNKNOWN, // OP-FP
-    IM_UNKNOWN, // reserved
-    IM_UNKNOWN, // custom-2/rv128
-    IM_UNKNOWN, // 48b
+    {"vlw.v", IT_I, NOALU, AC_U32, VLW_map, {}, 0x00007007,  0x0000707f, { .subfield = {3, 12} }, nullptr},
+    {"vsw.v", IT_I, NOALU, AC_U32, VSW_map, {}, 0x00007027,0x0000707f, { .subfield = {3, 12}}, nullptr},
+    {"vmacc.vv", IT_R, NOALU, NOMEM, VMACC_VV_map, {}, 0x00000057, 0xfe00707f, {.subfield = {3, 12}}, nullptr},
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
+    IM_UNKNOWN,
     {"branch", IT_B, NOALU, NOMEM, BRANCH_map, {}, 0x63, 0x7f, { .subfield = {3, 12} }, nullptr}, // BRANCH
     {"jalr", IT_I, { .alu_op=AluOp::ADD }, NOMEM, nullptr, {"d", "o(s)"}, 0x67, 0x7f, { .flags =
 IMF_SUPPORTED | IMF_REGWRITE | IMF_BRANCH_JALR | IMF_ALUSRC | IMF_ALU_REQ_RS }, inst_aliases_jalr}, // JALR
@@ -631,11 +719,18 @@ static const struct InstructionMap C_inst_unknown = IM_UNKNOWN;
 const BitField instruction_map_opcode_field = { 2, 0 };
 
 static inline const struct InstructionMap &InstructionMapFind(uint32_t code) {
+
     const struct InstructionMap *im = &C_inst_map[instruction_map_opcode_field.decode(code)];
+
     while (im->subclass != nullptr) {
+
         im = &im->subclass[im->subfield.decode(code)];
     }
-    if ((code ^ im->code) & im->mask) { return C_inst_unknown; }
+    if ((code ^ im->code) & im->mask) { 
+        printf("Unrecognized instruction: 0x%08x\n", code);
+        return C_inst_unknown; 
+    }
+    // printf("Instruction matched: %s\n", im->name);
     return *im;
 }
 
@@ -919,8 +1014,23 @@ void instruction_from_string_build_base(
 void instruction_from_string_build_base() {
     return instruction_from_string_build_base(C_inst_map, instruction_map_opcode_field, 0, 0);
 }
-
-static int parse_reg_from_string(const QString &str, uint *chars_taken = nullptr) {
+enum class RegisterType {
+    GENERAL_PURPOSE,
+    VECTOR,
+    // ... other types if needed ...
+};
+static int parse_reg_from_string(const QString &str, uint *chars_taken) {
+        if (str.at(0) == 'v') {
+            // Vector register
+            bool ok;
+            QString regNumStr = str.mid(1);
+            int regNum = regNumStr.toInt(&ok, 10);
+            if (!ok || regNum < 0 || regNum >= 32) {
+                printf("invalid vector register");
+            }
+            *chars_taken = regNumStr.size() + 1;
+            return regNum;
+        } 
     if (str.size() < 2) { return -1; }
     if (str.at(0) == 'x') {
         int res = 0;
@@ -953,7 +1063,8 @@ static int parse_reg_from_string(const QString &str, uint *chars_taken = nullptr
         }
         return regnum;
     }
-}
+
+    }
 
 const QString reloc_operators = QStringLiteral("+-/*|&^~");
 const QString reloc_special_chars = QStringLiteral("()%_");
@@ -1291,7 +1402,15 @@ uint32_t Instruction::parse_field(
         uint chars_taken = 0;
 
         switch (adesc->kind) {
-        case 'g': val += parse_reg_from_string(field_token, &chars_taken); break;
+    case 'g': {
+        val += parse_reg_from_string(field_token, &chars_taken);
+        break;   
+    }     
+    case 'v':{
+        val += parse_reg_from_string(field_token, &chars_taken);
+        break;
+    }
+        
         case 'p':
         case 'a': val -= inst_addr.get_raw(); FALLTROUGH
         case 'o':

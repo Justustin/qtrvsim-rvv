@@ -3,6 +3,8 @@
 #include "common/logging.h"
 #include "execute/alu.h"
 #include "utils.h"
+#include <iostream>
+
 
 #include <cinttypes>
 
@@ -44,15 +46,22 @@ Core::Core(
     , mem_data(mem_data)
     , mem_program(mem_program)
     , ex_handlers()
-    , ex_default_handler(new StopExceptionHandler()) {
+    , ex_default_handler(new StopExceptionHandler()) 
+    
+    {
     stop_on_exception.fill(true);
     step_over_exception.fill(true);
     step_over_exception[EXCAUSE_INT] = false;
+
+    for (int i = 0; i < 32; ++i) {
+        vectorRegisters[i].resize(max_vector_size, 0); // Resize and initialize with zeros
+    }
 }
 
 void Core::step(bool skip_break) {
     emit step_started();
     state.cycle_count++;
+    
     do_step(skip_break);
     emit step_done(state);
 }
@@ -60,6 +69,9 @@ void Core::step(bool skip_break) {
 void Core::reset() {
     state.cycle_count = 0;
     state.stall_count = 0;
+    for (int i = 0; i < 32; ++i) {
+        vectorRegisters[i].assign(max_vector_size, 0); // Reset all values to zero
+    }
     do_reset();
 }
 
@@ -279,6 +291,7 @@ enum ExceptionCause Core::memory_special(
 }
 
 FetchState Core::fetch(PCInterstage pc, bool skip_break) {
+    
     if (pc.stop_if) { return {}; }
 
     const Address inst_addr = Address(regs->read_pc());
@@ -397,7 +410,7 @@ DecodeState Core::decode(const FetchInterstage &dt) {
 
 ExecuteState Core::execute(const DecodeInterstage &dt) {
     enum ExceptionCause excause = dt.excause;
-    // TODO refactor to produce multiplexor index and multiplex function
+  
     const RegisterValue alu_fst = [=] {
         if (dt.alu_pc) return RegisterValue(dt.inst_addr.get_raw());
         return dt.val_rs;
@@ -407,7 +420,7 @@ ExecuteState Core::execute(const DecodeInterstage &dt) {
         if (dt.alusrc) return dt.immediate_val;
         return dt.val_rt;
     }();
-    const RegisterValue alu_val = [=] {
+     RegisterValue alu_val = [=] {
         if (excause != EXCAUSE_NONE) return RegisterValue(0);
         return alu_combined_operate(dt.aluop, dt.alu_component, dt.w_operation, dt.alu_mod, alu_fst, alu_sec);
     }();
@@ -418,6 +431,338 @@ ExecuteState Core::execute(const DecodeInterstage &dt) {
         if (dt.ff_rs != FORWARD_NONE || dt.ff_rt != FORWARD_NONE) return 2;
         return 0;
     }();
+    // TODO refactor to produce multiplexor index and multiplex function
+     if (dt.inst.flags() & IMF_VSETVL) {
+        // vsetvl rd, rs1, rs2
+        // printf("Executing vsetvl\n");
+        int rd = dt.num_rd;
+        int rs1 = dt.num_rs; // Desired vector length
+        int rs2 = dt.num_rt; // Vector type (element width: 8, 16, 32 bits)
+        // printf("RT : %d\n", rs2);
+        // printf("RT : %d\n", dt.val_rt);
+        int desired_vl = regs->read_gp(rs1).as_i32();
+        vectorType = regs->read_gp(rs2).as_i32(); // Element width
+        //printf("desired vl : %d\n", desired_vl);
+        vl = std::min(alu_fst.as_u64(), (uint64_t)(1024/(vectorType*8)));
+        alu_val = vl;
+        // printf("RD : %d\n", rd);
+        // Update the destination register with the new vl
+        regs->write_gp(rd, vl);
+
+        //printf("VSETVL executed: vl = %d, vectorType = %d\n", vl, vectorType);
+        
+    } else if (dt.inst.flags() & IMF_VADD_VV) {
+        // vadd.vv vd, vs2, vs1
+        // printf("Executing vadd.vv\n");
+        int vd = dt.num_rd;
+        int vs1 = dt.num_rs;
+        int vs2 = dt.num_rt;
+        
+        // Validate indices
+        if (vd < 0 || vd >= 32 || vs1 < 0 || vs1 >= 32 || vs2 < 0 || vs2 >= 32) {
+            throw std::runtime_error("Invalid vector register index in vadd.vv");
+        }
+
+        // Validate vector length
+        if (vl <= 0 || vl > max_vector_size) {
+            throw std::runtime_error("Invalid vector length in vadd.vv");
+        }
+
+        // Perform vector addition
+        for (int i = 0; i < vl; ++i) {
+            vectorRegisters[(int)vd][i] = vectorRegisters[(int)vs1][i] + vectorRegisters[(int)vs2][i];
+             printf("VADVV: vec1[%d][%d](%d) + vec1[%d][%d](%d) = vecd[%d][%d](%d)\n", (int)vs1, i, vectorRegisters[(int)vs1][i], (int)vs2, i, vectorRegisters[(int)vs2][i], (int)vd, i, 
+         vectorRegisters[(int)vd][i]);
+        }
+        
+        // printf("vadd.vv executed: vd = %d\n", vd);
+        
+    } else if (dt.inst.flags() & IMF_VADD_VX) {
+        // vadd.vx vd, vs2, rs1
+        // printf("Executing vadd.vx\n");
+        int vd = dt.num_rd;
+        int vs2 = dt.num_rt;
+        int rs1 = dt.num_rs; // Scalar register
+
+        // Validate indices
+        if (vd < 0 || vd >= 32 || vs2 < 0 || vs2 >= 32) {
+            throw std::runtime_error("Invalid vector register index in vadd.vx");
+        }
+
+        // Validate vector length
+        if (vl <= 0 || vl > max_vector_size) {
+            throw std::runtime_error("Invalid vector length in vadd.vx");
+        }
+
+        int scalar = regs->read_gp(rs1).as_i32();
+
+        // Perform vector addition with scalar
+        for (int i = 0; i < vl; ++i) {
+            vectorRegisters[vd][i] = vectorRegisters[vs2][i] + scalar;
+            
+        }
+
+        // printf("vadd.vx executed: vd = %d\n", vd);
+        
+    } else if (dt.inst.flags() & IMF_VADD_VI) {
+        // vadd.vi vd, vs2, imm
+        // printf("Executing vadd.vi\n");
+        int vd = dt.num_rd;
+        int vs2 = dt.num_rt;
+        int imm = dt.immediate_val.as_i32(); // Immediate value
+
+        // Validate indices
+        if (vd < 0 || vd >= 32 || vs2 < 0 || vs2 >= 32) {
+            throw std::runtime_error("Invalid vector register index in vadd.vi");
+        }
+
+        // Validate vector length
+        if (vl <= 0 || vl > max_vector_size) {
+            throw std::runtime_error("Invalid vector length in vadd.vi");
+        }
+
+        // Perform vector addition with immediate
+        for (int i = 0; i < vl; ++i) {
+            vectorRegisters[vd][i] = vectorRegisters[vs2][i] + imm;
+        }
+
+        // printf("vadd.vi executed: vd = %d\n", vd);
+        
+    } else if (dt.inst.flags() & IMF_VMUL_VV) {
+        // printf("Executing vmul.vv: vd = %d, vs2 = %d, vs1 = %d\n", dt.num_rd, dt.num_rt, dt.num_rs);
+        int vd = dt.num_rd;
+        int vs1 = dt.num_rs;
+        int vs2 = dt.num_rt;
+
+        // Validate indices
+        if (vd < 0 || vd >= 32 || vs1 < 0 || vs1 >= 32 || vs2 < 0 || vs2 >= 32) {
+            throw std::runtime_error("Invalid vector register index in vmul.vv");
+        }
+
+        // Validate vector length
+        if (vl <= 0 || vl > max_vector_size) {
+            throw std::runtime_error("Invalid vector length in vmul.vv");
+        }
+
+        // Perform vector multiplication
+        for (int i = 0; i < vl; ++i) {
+            vectorRegisters[vd][i] = vectorRegisters[vs1][i] * vectorRegisters[vs2][i];
+              printf("VMUL: vec1[%d][%d](%d) * vec1[%d][%d](%d) = vecd[%d][%d](%d)\n", (int)vs1, i, vectorRegisters[(int)vs1][i], (int)vs2, i, vectorRegisters[(int)vs2][i], (int)vd, i, 
+             vectorRegisters[(int)vd][i]);
+        }
+
+        // printf("vmul.vv executed: vd = %d\n", vd);
+       
+    }else if(dt.inst.flags() & IMF_VECTOR_LOAD){
+            // printf("Executing vlw.v\n");
+        int vd = dt.num_rd; // Destination vector register
+        int rs1 = dt.num_rs; // Base address register
+        int rt = dt.num_rt;
+        // printf("rt : %d\n", rt);
+        int offset = dt.immediate_val.as_i32(); // Offset immediate
+        // printf("offset : %d\n", offset);
+        // Compute effective address
+        uint64_t base_addr = regs->read_gp(rs1).as_u64();
+        uint64_t effective_addr = base_addr + offset;
+
+        // Set alu_val to effective_addr
+        alu_val = effective_addr;
+        // printf("execute passed : %d\n", effective_addr);
+
+        // Set control signals for memory access
+        bool memread = true;
+        bool memwrite = false;
+        AccessControl memctl = AC_U32; // 32-bit unsigned word
+
+        // Set up vector operation details
+        bool is_vector_load = true;
+        int vector_reg = vd;
+        // int vector_length = vl;
+    
+        return { ExecuteInternalState {
+                 .alu_src1 = dt.val_rs,
+                 .alu_src2 = alu_sec,
+                 .immediate = dt.immediate_val,
+                 .rs = dt.val_rs_orig,
+                 .rt = dt.val_rt_orig,
+                 .stall_status = stall_status,
+                 .alu_op_num = static_cast<unsigned>(dt.aluop.alu_op),
+                 .forward_from_rs1_num = static_cast<unsigned>(dt.ff_rs),
+                 .forward_from_rs2_num = static_cast<unsigned>(dt.ff_rt),
+                 .excause_num = static_cast<unsigned>(dt.excause),
+                 .alu_src = dt.alusrc,
+                 .alu_mul = dt.alu_component == AluComponent::MUL,
+                 .branch_bxx = dt.branch_bxx,
+                 .alu_pc = dt.alu_pc,
+             },
+             ExecuteInterstage {
+                 .inst = dt.inst,
+                 .inst_addr = dt.inst_addr,
+                 .next_inst_addr = dt.next_inst_addr,
+                 .predicted_next_inst_addr = dt.predicted_next_inst_addr,
+                 .branch_jal_target = branch_jal_target,
+                 .val_rt = dt.val_rt,
+                 .alu_val = alu_val,
+                 .immediate_val = dt.immediate_val,
+                 .csr_read_val = dt.csr_read_val,
+                 .csr_address = dt.csr_address,
+                 .excause = excause,
+                 .memctl = memctl,
+                 .num_rd = dt.num_rd,
+                 .memread = memread,
+                 .memwrite = memwrite,
+                 .regwrite = dt.regwrite,
+                 .is_valid = dt.is_valid,
+                 .branch_bxx = dt.branch_bxx,
+                 .branch_jal = dt.branch_jal,
+                 .branch_val = dt.branch_val,
+                 .branch_jalr = dt.branch_jalr,
+                 .alu_zero = alu_val == 0,
+                 .csr = dt.csr,
+                 .csr_write = dt.csr_write,
+                 .xret = dt.xret,
+                 .is_vector_load = is_vector_load,
+                 .vector_reg = vector_reg,
+                //  .vector_length = vector_length,
+             } };
+    }else if (dt.inst.flags() & IMF_VECTOR_STORE) {
+    // vsw.v instruction
+        // printf("Executing vsw.v\n");
+        int vs2 = dt.num_rt; // Source vector register
+        int rs1 = dt.num_rs; // Base address register
+        int offset = dt.immediate_val.as_i32(); // Offset immediate
+
+        // Compute effective address
+        uint64_t base_addr = regs->read_gp(rs1).as_u64();
+        uint64_t effective_addr = base_addr + offset;
+
+        // Set alu_val to effective_addr
+        alu_val = effective_addr;
+
+        // Set control signals for memory access
+        bool memread = false;
+        bool memwrite = true;
+        AccessControl memctl = AC_U32; // 32-bit unsigned word
+
+        // Set up vector operation details
+        bool is_vector_store = true;
+        int vector_reg = vs2;
+        // int vector_length = vl;
+
+        return { ExecuteInternalState {
+                 .alu_src1 = dt.val_rs,
+                 .alu_src2 = alu_sec,
+                 .immediate = dt.immediate_val,
+                 .rs = dt.val_rs_orig,
+                 .rt = dt.val_rt_orig,
+                 .stall_status = stall_status,
+                 .alu_op_num = static_cast<unsigned>(dt.aluop.alu_op),
+                 .forward_from_rs1_num = static_cast<unsigned>(dt.ff_rs),
+                 .forward_from_rs2_num = static_cast<unsigned>(dt.ff_rt),
+                 .excause_num = static_cast<unsigned>(dt.excause),
+                 .alu_src = dt.alusrc,
+                 .alu_mul = dt.alu_component == AluComponent::MUL,
+                 .branch_bxx = dt.branch_bxx,
+                 .alu_pc = dt.alu_pc,
+             },
+             ExecuteInterstage {
+                 .inst = dt.inst,
+                 .inst_addr = dt.inst_addr,
+                 .next_inst_addr = dt.next_inst_addr,
+                 .predicted_next_inst_addr = dt.predicted_next_inst_addr,
+                 .branch_jal_target = branch_jal_target,
+                 .val_rt = dt.val_rt,
+                 .alu_val = alu_val,
+                 .immediate_val = dt.immediate_val,
+                 .csr_read_val = dt.csr_read_val,
+                 .csr_address = dt.csr_address,
+                 .excause = excause,
+                 .memctl = memctl,
+                 .num_rd = dt.num_rd,
+                 .memread = memread,
+                 .memwrite = memwrite,
+                 .regwrite = dt.regwrite,
+                 .is_valid = dt.is_valid,
+                 .branch_bxx = dt.branch_bxx,
+                 .branch_jal = dt.branch_jal,
+                 .branch_val = dt.branch_val,
+                 .branch_jalr = dt.branch_jalr,
+                 .alu_zero = alu_val == 0,
+                 .csr = dt.csr,
+                 .csr_write = dt.csr_write,
+                 .xret = dt.xret,
+                 .is_vector_store = is_vector_store,
+                 .vector_reg = vector_reg,
+                //  .vector_length = vector_length,
+             } };
+    }else if (dt.inst.flags() & IMF_VMACC_VV) {
+    // vmacc.vv vd, vs1, vs2
+    // printf("Executing vmacc.vv\n");
+    int vd = dt.num_rd;     // Destination vector register index
+    int vs1 = dt.num_rs;    // Source vector register 1 index
+    int vs2 = dt.num_rt;    // Source vector register 2 index
+
+    // Validate indices
+    // if (vd < 0 || vd >= 32 || vs1 < 0 || vs1 >= 32 || vs2 < 0 || vs2 >= 32) {
+    //     throw std::runtime_error("Invalid vector register index in vmacc.vv");
+    // }
+
+    // Validate vector length
+    if (vl <= 0 || vl > max_vector_size) {
+        throw std::runtime_error("Invalid vector length in vmacc.vv");
+    }
+     std::vector<uint32_t> temp(vl, 0);
+    // Perform vector multiply-accumulate
+    for (int i = 0; i < vl; ++i) {
+        temp[i] = vectorRegisters[vs1][i] * vectorRegisters[vs2][i];
+        //    printf("vmacc.vv: temp[%d] = vec[%d][%d](%d) * vec[%d][%d](%d) = %d\n",
+        //           i, vs1, i,vectorRegisters[vs1][i], vs2, i,vectorRegisters[vs2][i], temp[i]);
+    }
+     std::vector<uint32_t> buffer(max_vector_size, 0); // Temporary buffer for reductions
+    // Perform binary tree reduction on the temporary buffer
+    int vl_reduction = vl;
+    while (vl_reduction > 1) {
+        int half = vl_reduction / 2;
+        // Pair-wise summing
+        for (int i = 0; i < half; ++i) {
+            buffer[i] = temp[i] + temp[i + half];
+           // printf("Reduction step: buffer[%d] = temp[%d] + temp[%d] => %u\n", 
+                  // i, i, i + half, buffer[i]);
+        }
+
+        // Handle carry forward for odd vl_reduction
+        if (vl_reduction % 2 != 0) {
+            buffer[half] = temp[vl_reduction - 1];
+            printf("Carry forward: buffer[%d] = temp[%d} => %u\n", 
+                   half, vl_reduction - 1, buffer[half]);
+            vl_reduction = half + 1;
+        } else {
+            vl_reduction = half;
+        }
+
+        // Prepare for next reduction step
+        for (int i = 0; i < vl_reduction; ++i) {
+            temp[i] = buffer[i];
+        }
+
+        // Clear the buffer for the next iteration
+        std::fill(buffer.begin(), buffer.end(), 0);
+    }
+
+        
+    
+    // Now vectorRegisters[vd][0] contains the sum of all elements
+     uint32_t sum = temp[0];
+     registers[vd] = sum;
+    // Store the reduced sum in a scalar register if needed
+    // For example, you can use a special field or method to pass it back to the CPU state
+    // Alternatively, leave it in vectorRegisters[vd][0] and use vmv.x.s in the assembly code
+    
+    printf("Result stored: %d\n", registers[(int)vd]);
+
+    // printf("vmacc.vv executed with reduction: vd=%d\n", vd);
+    cycle_count += 1 + vl; // Adjust cycle count as necessary
+}
 
     return { ExecuteInternalState {
                  .alu_src1 = dt.val_rs,
@@ -473,8 +818,52 @@ MemoryState Core::memory(const ExecuteInterstage &dt) {
     Address computed_next_inst_addr;
 
     enum ExceptionCause excause = dt.excause;
+    
     if (excause == EXCAUSE_NONE) {
-        if (is_special_access(dt.memctl)) {
+        if (dt.is_vector_load) {
+            // printf("VL : %d", vl);
+            // Handle vector load
+            int vd = dt.vector_reg;
+            auto addr = mem_addr;
+            for (int i = 0; i < vl; ++i) {
+                uint32_t loaded_val = 0;
+                // loaded_val = mem_data->read_u32(addr + i * 4);
+                // vectorRegisters[vd][i] = loaded_val;
+                 
+                switch (vectorType) {
+                    case 1:
+                        loaded_val = mem_data->read_u8(machine::Address(addr + i * 4)); // Use 'addr'
+                        break;
+                    case 2:
+                        loaded_val = mem_data->read_u16(machine::Address(addr + i * 4));
+                        break;
+                    case 4:
+                        loaded_val = mem_data->read_u32(machine::Address(addr + i * 4));
+                        break;
+                    default:
+                        throw std::runtime_error("Unsupported vectorType in vlw.v");
+                }
+                vectorRegisters[vd][i] = loaded_val;
+                // printf("vlw.v: Loaded 0x%08x from address 0x%" PRIx64 "\n", loaded_val, addr + i * 4);
+                // printf("vlw.v: vec[%d][%d] = %d\n", vd, i, loaded_val);
+                
+            }
+            state.cycle_count += vl + 32 - 1;
+            regwrite = false; // Since vector registers are updated directly
+        }else if(dt.is_vector_store){
+            int vs2 = dt.vector_reg;
+            auto addr = mem_addr; // Effective address
+            for (int i = 0; i <vl; ++i) {
+                
+                mem_data->write_u32(addr + i * 4, vectorRegisters[vs2][i]);
+                uint32_t stored_val = vectorRegisters[vs2][i];
+                // printf("vsw.v: stored 0x%08x to address 0x%" PRIx64 "\n", stored_val, addr + i * 4);
+                state.cycle_count += 1;
+            }
+            state.cycle_count -= 1;
+            regwrite = false; // No register to write back
+        } 
+        else if (is_special_access(dt.memctl)) {
             excause = memory_special(
                 dt.memctl, dt.inst.rt(), memread, memwrite, towrite_val, dt.val_rt, mem_addr);
         } else if (is_regular_access(dt.memctl)) {
@@ -574,7 +963,20 @@ MemoryState Core::memory(const ExecuteInterstage &dt) {
 }
 
 WritebackState Core::writeback(const MemoryInterstage &dt) {
-    if (dt.regwrite) { regs->write_gp(dt.num_rd, dt.towrite_val); }
+    if (dt.regwrite && !(dt.inst.flags()& IMF_VADD_VV)&& !(dt.inst.flags() & IMF_VMEM)&& !(dt.inst.flags()&IMF_VMUL_VV)&& !(dt.inst.flags()& IMF_VADD_VI)){
+        regs->write_gp(dt.num_rd,dt.towrite_val);
+    }
+    if (dt.regwrite && (dt.inst.flags()& IMF_VADD_VV && (dt.inst.flags()& IMF_VMEM)) &&(dt.inst.flags()& IMF_VMUL_VV)){
+        regs->write_gp(dt.num_rd, dt.towrite_val);
+    } 
+
+    if(dt.inst.flags() & (IMF_VADD_VV | IMF_VADD_VX | IMF_VADD_VI)){
+        state.cycle_count += vl - 1;
+    }
+    if(dt.inst.flags() & IMF_VMUL_VV){
+        state.cycle_count += vl + 4 - 1;
+    }
+    std::cout << "Cycle Count : " << state.cycle_count << std::endl;
 
     return WritebackState { WritebackInternalState {
         .inst = (dt.excause == EXCAUSE_NONE)? dt.inst: Instruction::NOP,

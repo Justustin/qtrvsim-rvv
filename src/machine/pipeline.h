@@ -179,6 +179,10 @@ struct ExecuteInterstage {
     bool csr = false;
     bool csr_write = false;
     bool xret = false;
+    bool is_vector_store = false;
+    bool is_vector_load = false;
+    int vector_reg;
+    // int vector_length;
 
 public:
     /** Reset to value corresponding to NOP. */
